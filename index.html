@@ -85,8 +85,6 @@
     display:flex; align-items:center; justify-content:center; text-align:center; color:#fff3ee;
     box-shadow: inset 0 0 0 1px rgba(0,0,0,.35), inset 0 0 0 5px rgba(255,255,255,.08), 0 1px 4px rgba(0,0,0,.45);
   }
-  .rlabel .t1{ font-weight:900; letter-spacing:1px; line-height:1.05; font-size:clamp(11px, 3.4vw, 20px); text-shadow:0 1px 1px rgba(0,0,0,.45); }
-  .rlabel .t2{ font-size:clamp(8px, 2.0vw, 12px); opacity:.85; margin-top:3px; letter-spacing:2px; }
   .marker{
     position:absolute; top:8%; left:50%; transform:translateX(-50%); pointer-events:none;
     width:9px; height:9px; border-radius:50%;
@@ -98,9 +96,6 @@
     background:radial-gradient(circle at 40% 34%, #fff, #cacfd3 42%, #8c9196 72%, #5d6267);
     box-shadow:0 1px 3px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.45);
   }
-  /* tonearm (decorative, SVG) */
-  .tonearm{ position:absolute; inset:0; pointer-events:none; z-index:4; }
-  .hint{ position:absolute; bottom:2px; left:0; right:0; text-align:center; color:#56595e; font-size:10px; pointer-events:none; }
 
   /* ---- control panel ---- */
   .panel{ display:flex; align-items:center; gap:14px; padding:6px 18px 8px; }
@@ -167,28 +162,11 @@
       <div class="disc-rot" id="disc">
         <div class="strobe"></div>
         <div class="vinyl"></div>
-        <div class="rlabel">
-          <div>
-            <div class="t1">SCRATCH</div>
-            <div class="t2">33⅓</div>
-          </div>
-        </div>
+        <div class="rlabel"></div>
         <div class="marker"></div>
       </div>
       <div class="spindle"></div>
     </div>
-    <svg class="tonearm" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
-      <!-- counterweight -->
-      <line x1="88" y1="19" x2="95.5" y2="14.5" stroke="#b6b9be" stroke-width="3.2" stroke-linecap="round"/>
-      <rect x="92" y="10" width="8.5" height="8" rx="1.6" fill="#2a2c30"/>
-      <!-- arm -->
-      <line x1="88" y1="19" x2="58" y2="33" stroke="#dfe2e5" stroke-width="2.4" stroke-linecap="round"/>
-      <!-- pivot -->
-      <circle cx="88" cy="19" r="3.6" fill="#eef0f2" stroke="#8f9398" stroke-width="0.8"/>
-      <!-- headshell -->
-      <rect x="53.5" y="30.5" width="9" height="5.4" rx="1.2" fill="#26282c" transform="rotate(25 58 33)"/>
-    </svg>
-    <div class="hint">指でこすってスクラッチ</div>
   </div>
 
   <div class="panel">
@@ -198,7 +176,6 @@
   </div>
 
   <div class="fader" id="fader">
-    <span class="sub" id="faderSub">押すと音が出る</span>
     <span class="flabel">CUT</span>
     <span class="modebtn"><button class="mbtn" id="modeBtn">Transform</button></span>
   </div>
@@ -254,6 +231,7 @@ let SAMPLES_PER_REV = 0;
 const SEC_PER_REV = 1.8;      // レコード1回転 ≈ 1.8秒 (33⅓rpm 相当)
 const MAX_RATE = 12;
 let loaded=false, basePlaying=false, scratching=false, curPos=0, totalSec=0;
+let trackLen=0, prevPos=0, rotDeg=0; // 回転は実移動量を積算（ループでリセットしない）
 let faderMode='transform';    // 'transform' = 押すと音 / 'cut' = 押すとカット
 let faderPressed=false;
 
@@ -319,7 +297,8 @@ fileInput.addEventListener('change', async (e)=>{
     if(right){ msg.right=right; transfer.push(right.buffer); }
     node.port.postMessage(msg, transfer);
     totalSec = buf.length / buf.sampleRate;
-    curPos=0; loaded=true; basePlaying=false;
+    trackLen = buf.length;
+    curPos=0; prevPos=0; rotDeg=0; loaded=true; basePlaying=false;
     document.getElementById('track').textContent = f.name;
     document.getElementById('play').disabled=false;
     document.getElementById('cue').disabled=false;
@@ -352,7 +331,7 @@ function updatePlayBtn(){
 }
 document.getElementById('cue').addEventListener('click', ()=>{
   if(!loaded) return;
-  node.port.postMessage({type:'seek', pos:0}); curPos=0;
+  node.port.postMessage({type:'seek', pos:0}); curPos=0; prevPos=0;
 });
 
 /* ============ Turntable scratch (pointer) ============ */
@@ -403,7 +382,6 @@ platter.addEventListener('pointercancel', endScratch);
 
 /* ============ Fader (momentary cut) ============ */
 const fader=document.getElementById('fader');
-const faderSub=document.getElementById('faderSub');
 let fPointer=null;
 
 function applyGain(){
@@ -431,7 +409,6 @@ document.getElementById('modeBtn').addEventListener('click',(e)=>{
   e.stopPropagation();
   faderMode = (faderMode==='transform') ? 'cut' : 'transform';
   document.getElementById('modeBtn').textContent = (faderMode==='transform')?'Transform':'Cut';
-  faderSub.textContent = (faderMode==='transform')?'押すと音が出る':'押すとカット';
   const soundOn = (faderMode==='transform') ? faderPressed : !faderPressed;
   fader.classList.toggle('on', soundOn);
   applyGain();
@@ -446,8 +423,15 @@ function tick(){
     rateParam.cancelScheduledValues(ctx.currentTime);
     rateParam.setTargetAtTime(0, ctx.currentTime, 0.02);
   }
-  if(SAMPLES_PER_REV){
-    disc.style.transform = 'rotate('+ (curPos/SAMPLES_PER_REV*360) +'deg)';
+  if(SAMPLES_PER_REV && trackLen){
+    // 実際の再生位置の差分だけ回転を積算。ループ境界(末尾→先頭)はラップ補正して
+    // 連続回転を保つ（曲の繰り返しでマーカーが先頭に戻らない）。
+    let d = curPos - prevPos;
+    if(d > trackLen/2) d -= trackLen;
+    else if(d < -trackLen/2) d += trackLen;
+    rotDeg += d / SAMPLES_PER_REV * 360;
+    prevPos = curPos;
+    disc.style.transform = 'rotate('+ rotDeg +'deg)';
   }
   if(loaded && sampleRate){
     document.getElementById('time').textContent = fmt(curPos/sampleRate)+' / '+fmt(totalSec);
