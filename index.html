@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Scratch Pad</title>
+<style>
+  :root{
+    --bg:#0c0d10; --panel:#16181d; --line:#2a2d35;
+    --accent:#39e0b0; --accent2:#ff5577; --text:#e8eaed; --sub:#8b909a;
+  }
+  *{box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;}
+  html,body{height:100%; margin:0; overflow:hidden;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    touch-action:none;
+  }
+  header{
+    padding:10px 14px 6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  }
+  .title{font-weight:700; letter-spacing:.5px; font-size:15px; color:var(--accent);}
+  .track{font-size:12px; color:var(--sub); flex:1; min-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .btn{
+    background:var(--panel); color:var(--text); border:1px solid var(--line);
+    border-radius:12px; padding:10px 14px; font-size:14px; font-weight:600;
+    -webkit-appearance:none; appearance:none; touch-action:manipulation;
+  }
+  .btn:active{filter:brightness(1.25);}
+  .btn.primary{border-color:var(--accent); color:var(--accent);}
+  .btn.playing{background:var(--accent); color:#04130d; border-color:var(--accent);}
+  .controls{display:flex; gap:8px; align-items:center; padding:4px 14px 8px; flex-wrap:wrap;}
+  .time{font-variant-numeric:tabular-nums; font-size:12px; color:var(--sub); margin-left:auto;}
+
+  /* Turntable */
+  .stage{flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:0; padding:6px;}
+  .platter{
+    position:relative; width:min(82vw, 60vh); aspect-ratio:1/1; border-radius:50%;
+    background:
+      radial-gradient(circle at 50% 50%, #2a2d35 0 16%, #15171c 16% 17%, #1d2026 17% 100%);
+    box-shadow:0 12px 40px rgba(0,0,0,.6), inset 0 0 0 2px #000;
+    touch-action:none; display:flex; align-items:center; justify-content:center;
+  }
+  .grooves{
+    position:absolute; inset:6%; border-radius:50%;
+    background:repeating-radial-gradient(circle at 50% 50%, #1a1c22 0 2px, #202329 2px 4px);
+    pointer-events:none; opacity:.9;
+  }
+  .disc-rot{position:absolute; inset:0; will-change:transform;}
+  .marker{
+    position:absolute; top:6%; left:50%; width:6px; height:38%;
+    background:linear-gradient(var(--accent), transparent);
+    transform:translateX(-50%); border-radius:4px; opacity:.85;
+  }
+  .label{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:34%; aspect-ratio:1/1; border-radius:50%;
+    background:radial-gradient(circle at 40% 35%, #ff7a93, var(--accent2));
+    display:flex; align-items:center; justify-content:center; text-align:center;
+    color:#2a0410; font-weight:800; font-size:11px; box-shadow:inset 0 0 0 3px rgba(0,0,0,.3);
+  }
+  .spindle{position:absolute; top:50%; left:50%; width:10px; height:10px; background:#0a0b0e; border-radius:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 2px #333;}
+  .hint{position:absolute; bottom:-26px; left:0; right:0; text-align:center; color:var(--sub); font-size:11px;}
+
+  /* Fader */
+  .fader{
+    margin:8px 14px calc(8px + env(safe-area-inset-bottom));
+    height:92px; border-radius:18px; border:1px solid var(--line);
+    background:linear-gradient(180deg,#1b1e24,#121419);
+    display:flex; align-items:center; justify-content:center; position:relative;
+    touch-action:none; transition:background .04s, box-shadow .04s;
+  }
+  .fader .flabel{font-weight:800; font-size:18px; letter-spacing:1px; color:var(--sub);}
+  .fader.on{background:linear-gradient(180deg,#163b32,#0f2a24); box-shadow:inset 0 0 0 2px var(--accent), 0 0 24px rgba(57,224,176,.25);}
+  .fader.on .flabel{color:var(--accent);}
+  .fader .sub{position:absolute; top:6px; left:12px; font-size:11px; color:var(--sub);}
+  .modebtn{position:absolute; top:6px; right:8px;}
+  .modebtn .btn{padding:4px 8px; font-size:11px; border-radius:9px;}
+
+  input[type=file]{display:none;}
+  .overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,.75); display:none;
+    align-items:center; justify-content:center; flex-direction:column; gap:14px; z-index:10; padding:30px; text-align:center;
+  }
+  .overlay.show{display:flex;}
+  .spinner{width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+  <header>
+    <span class="title">SCRATCH PAD</span>
+    <span class="track" id="track">ファイル未読み込み</span>
+    <button class="btn" id="loadBtn">読み込み</button>
+    <input type="file" id="file" accept="audio/*,video/*,.wav,.mp3,.m4a,.aac,.mp4,.mov">
+  </header>
+
+  <div class="controls">
+    <button class="btn primary" id="play" disabled>▶ 再生</button>
+    <button class="btn" id="cue" disabled>⏮ 頭出し</button>
+    <span class="time" id="time">0:00 / 0:00</span>
+  </div>
+
+  <div class="stage">
+    <div class="platter" id="platter">
+      <div class="grooves"></div>
+      <div class="disc-rot" id="disc">
+        <div class="marker"></div>
+      </div>
+      <div class="label">SCRATCH</div>
+      <div class="spindle"></div>
+      <div class="hint">指でこすってスクラッチ</div>
+    </div>
+  </div>
+
+  <div class="fader" id="fader">
+    <span class="sub" id="faderSub">押すと音が出る</span>
+    <span class="flabel">FADER</span>
+    <span class="modebtn"><button class="btn" id="modeBtn">Transform</button></span>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="spinner"></div>
+    <div id="overlayMsg">デコード中…</div>
+  </div>
+
+<script>
+/* ============ AudioWorklet processor (Blob module) ============ */
+const processorCode = `
+class ScratchProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [{name:'rate', defaultValue:0, automationRate:'a-rate'}]; }
+  constructor(){
+    super();
+    this.L=null; this.R=null; this.len=0; this.pos=0; this.report=0;
+    this.port.onmessage=(e)=>{
+      const d=e.data;
+      if(d.type==='load'){ this.L=d.left; this.R=d.right||d.left; this.len=this.L.length; this.pos=0; }
+      else if(d.type==='seek'){ this.pos=d.pos; }
+    };
+  }
+  process(inputs, outputs, params){
+    const out=outputs[0]; const oL=out[0]; const oR=out[1]||out[0];
+    const n=oL.length;
+    if(!this.L || this.len===0){ for(let i=0;i<n;i++){ oL[i]=0; oR[i]=0; } return true; }
+    const L=this.L, R=this.R, len=this.len;
+    const rate=params.rate; const cr=rate.length===1;
+    let pos=this.pos;
+    for(let i=0;i<n;i++){
+      while(pos>=len) pos-=len;
+      while(pos<0) pos+=len;
+      const i0=pos|0; let i1=i0+1; if(i1>=len) i1=0;
+      const f=pos-i0;
+      oL[i]=L[i0]+(L[i1]-L[i0])*f;
+      oR[i]=R[i0]+(R[i1]-R[i0])*f;
+      pos += cr?rate[0]:rate[i];
+    }
+    while(pos>=len) pos-=len; while(pos<0) pos+=len;
+    this.pos=pos;
+    this.report+=n;
+    if(this.report>=2048){ this.report=0; this.port.postMessage({type:'pos', pos:this.pos}); }
+    return true;
+  }
+}
+registerProcessor('scratch', ScratchProcessor);
+`;
+
+/* ============ Globals ============ */
+let ctx, node, gain, rateParam, sampleRate;
+let SAMPLES_PER_REV = 0;
+const SEC_PER_REV = 1.8;      // レコード1回転 ≈ 1.8秒 (33⅓rpm 相当)
+const MAX_RATE = 12;
+let loaded=false, basePlaying=false, scratching=false, curPos=0, totalSec=0;
+let faderMode='transform';    // 'transform' = 押すと音 / 'cut' = 押すとカット
+let faderPressed=false;
+
+/* ============ Audio init ============ */
+async function initAudio(){
+  if(ctx) return;
+  ctx = new (window.AudioContext||window.webkitAudioContext)();
+  sampleRate = ctx.sampleRate;
+  SAMPLES_PER_REV = sampleRate * SEC_PER_REV;
+  const url = URL.createObjectURL(new Blob([processorCode], {type:'application/javascript'}));
+  await ctx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+  node = new AudioWorkletNode(ctx, 'scratch', {outputChannelCount:[2]});
+  rateParam = node.parameters.get('rate');
+  gain = ctx.createGain();
+  gain.gain.value = 0; // Transformモード初期: 押すまで無音
+  node.connect(gain).connect(ctx.destination);
+  node.port.onmessage = (e)=>{ if(e.data.type==='pos') curPos=e.data.pos; };
+}
+
+/* ============ File load ============ */
+const fileInput=document.getElementById('file');
+document.getElementById('loadBtn').addEventListener('click', ()=> fileInput.click());
+
+fileInput.addEventListener('change', async (e)=>{
+  const f=e.target.files[0]; if(!f) return;
+  showOverlay('デコード中…');
+  try{
+    await initAudio();
+    if(ctx.state==='suspended') await ctx.resume();
+    const arr = await f.arrayBuffer();
+    const buf = await ctx.decodeAudioData(arr);
+    const left = buf.getChannelData(0).slice(0);
+    let right;
+    if(buf.numberOfChannels>1){ right = buf.getChannelData(1).slice(0); }
+    const msg = {type:'load', left}; const transfer=[left.buffer];
+    if(right){ msg.right=right; transfer.push(right.buffer); }
+    node.port.postMessage(msg, transfer);
+    totalSec = buf.length / buf.sampleRate;
+    curPos=0; loaded=true; basePlaying=false;
+    document.getElementById('track').textContent = f.name;
+    document.getElementById('play').disabled=false;
+    document.getElementById('cue').disabled=false;
+    updatePlayBtn();
+    rateParam.cancelScheduledValues(ctx.currentTime);
+    rateParam.setValueAtTime(0, ctx.currentTime);
+  }catch(err){
+    console.error(err);
+    showOverlay('このファイルは読み込めませんでした。\\n別の形式 (mp3/wav/m4a) に変換してお試しください。', true);
+    setTimeout(hideOverlay, 2600);
+    return;
+  }
+  hideOverlay();
+  e.target.value='';
+});
+
+/* ============ Play / Stop / Cue ============ */
+const playBtn=document.getElementById('play');
+playBtn.addEventListener('click', async ()=>{
+  if(!loaded) return;
+  if(ctx.state==='suspended') await ctx.resume();
+  basePlaying=!basePlaying;
+  if(!scratching){
+    rateParam.cancelScheduledValues(ctx.currentTime);
+    rateParam.setTargetAtTime(basePlaying?1:0, ctx.currentTime, 0.05);
+  }
+  updatePlayBtn();
+});
+function updatePlayBtn(){
+  playBtn.textContent = basePlaying ? '⏸ 停止' : '▶ 再生';
+  playBtn.classList.toggle('playing', basePlaying);
+}
+document.getElementById('cue').addEventListener('click', ()=>{
+  if(!loaded) return;
+  node.port.postMessage({type:'seek', pos:0}); curPos=0;
+});
+
+/* ============ Turntable scratch (pointer) ============ */
+const platter=document.getElementById('platter');
+const disc=document.getElementById('disc');
+let pPointer=null, cx=0, cy=0, lastAngle=0, lastMove=0, idleZeroed=false;
+
+function angleOf(x,y){ return Math.atan2(y-cy, x-cx); }
+
+platter.addEventListener('pointerdown', (e)=>{
+  if(!loaded) return;
+  e.preventDefault();
+  platter.setPointerCapture(e.pointerId);
+  pPointer=e.pointerId;
+  const r=platter.getBoundingClientRect();
+  cx=r.left+r.width/2; cy=r.top+r.height/2;
+  lastAngle=angleOf(e.clientX,e.clientY);
+  lastMove=performance.now(); idleZeroed=false;
+  scratching=true;
+  rateParam.cancelScheduledValues(ctx.currentTime);
+  rateParam.setTargetAtTime(0, ctx.currentTime, 0.005); // 触れた瞬間は止める
+});
+platter.addEventListener('pointermove', (e)=>{
+  if(e.pointerId!==pPointer) return;
+  e.preventDefault();
+  const now=performance.now();
+  const a=angleOf(e.clientX,e.clientY);
+  let da=a-lastAngle;
+  if(da>Math.PI) da-=2*Math.PI; else if(da<-Math.PI) da+=2*Math.PI;
+  const dt=(now-lastMove)/1000;
+  lastAngle=a; lastMove=now; idleZeroed=false;
+  if(dt>0){
+    const revPerSec=(da/(2*Math.PI))/dt;
+    let rate=revPerSec*SEC_PER_REV;
+    rate=Math.max(-MAX_RATE, Math.min(MAX_RATE, rate));
+    rateParam.cancelScheduledValues(ctx.currentTime);
+    rateParam.setTargetAtTime(rate, ctx.currentTime, 0.01);
+  }
+});
+function endScratch(e){
+  if(e.pointerId!==pPointer) return;
+  pPointer=null; scratching=false;
+  rateParam.cancelScheduledValues(ctx.currentTime);
+  rateParam.setTargetAtTime(basePlaying?1:0, ctx.currentTime, 0.07); // 離したら元の状態へ
+}
+platter.addEventListener('pointerup', endScratch);
+platter.addEventListener('pointercancel', endScratch);
+
+/* ============ Fader (momentary cut) ============ */
+const fader=document.getElementById('fader');
+const faderSub=document.getElementById('faderSub');
+let fPointer=null;
+
+function applyGain(){
+  if(!gain) return;
+  // transform: 押す=音(1), 離す=無音(0) / cut: 押す=無音(0), 離す=音(1)
+  let on = (faderMode==='transform') ? faderPressed : !faderPressed;
+  gain.gain.cancelScheduledValues(ctx.currentTime);
+  gain.gain.setTargetAtTime(on?1:0, ctx.currentTime, 0.004); // クリックノイズ防止
+}
+fader.addEventListener('pointerdown',(e)=>{
+  e.preventDefault();
+  if(!ctx) return;
+  fader.setPointerCapture(e.pointerId); fPointer=e.pointerId;
+  faderPressed=true; fader.classList.toggle('on', faderMode==='transform'); applyGain();
+});
+function faderUp(e){
+  if(e.pointerId!==fPointer) return;
+  fPointer=null; faderPressed=false;
+  fader.classList.toggle('on', faderMode==='cut'); applyGain();
+}
+fader.addEventListener('pointerup', faderUp);
+fader.addEventListener('pointercancel', faderUp);
+
+document.getElementById('modeBtn').addEventListener('click',(e)=>{
+  e.stopPropagation();
+  faderMode = (faderMode==='transform') ? 'cut' : 'transform';
+  document.getElementById('modeBtn').textContent = (faderMode==='transform')?'Transform':'Cut';
+  faderSub.textContent = (faderMode==='transform')?'押すと音が出る':'押すとカット';
+  const soundOn = (faderMode==='transform') ? faderPressed : !faderPressed;
+  fader.classList.toggle('on', soundOn);
+  applyGain();
+});
+
+/* ============ Animation / time / idle-watchdog ============ */
+function fmt(s){ s=Math.max(0,s|0); return (s/60|0)+':'+String(s%60).padStart(2,'0'); }
+function tick(){
+  if(scratching && !idleZeroed && performance.now()-lastMove>50){
+    // 指を止めている間はレコードも停止
+    idleZeroed=true;
+    rateParam.cancelScheduledValues(ctx.currentTime);
+    rateParam.setTargetAtTime(0, ctx.currentTime, 0.02);
+  }
+  if(SAMPLES_PER_REV){
+    disc.style.transform = 'rotate('+ (curPos/SAMPLES_PER_REV*360) +'deg)';
+  }
+  if(loaded && sampleRate){
+    document.getElementById('time').textContent = fmt(curPos/sampleRate)+' / '+fmt(totalSec);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+/* ============ Overlay ============ */
+function showOverlay(msg){ document.getElementById('overlayMsg').textContent=msg; document.getElementById('overlay').classList.add('show'); }
+function hideOverlay(){ document.getElementById('overlay').classList.remove('show'); }
+
+/* prevent iOS double-tap zoom / scroll bounce */
+document.addEventListener('gesturestart', e=>e.preventDefault());
+document.addEventListener('touchmove', e=>{ if(e.touches.length>1) e.preventDefault(); }, {passive:false});
+</script>
+</body>
+</html>
