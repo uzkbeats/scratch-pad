@@ -50,7 +50,7 @@
   /* ---- turntable ---- */
   .stage{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:0; padding:4px; }
   .platter{
-    position:relative; width:min(86vw, 54vh); aspect-ratio:1/1; border-radius:50%;
+    position:relative; width:min(80vw, 42vh); aspect-ratio:1/1; border-radius:50%;
     touch-action:none;
     background:radial-gradient(circle at 50% 50%, #34373c 0 4%, #25272b 4% 100%);
     box-shadow:
@@ -97,6 +97,23 @@
     background:radial-gradient(circle at 40% 34%, #fff, #cacfd3 42%, #8c9196 72%, #5d6267);
     box-shadow:0 1px 3px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.45);
   }
+
+  /* ---- one-button scratch grid ---- */
+  .scratch-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; padding:2px 12px 4px; }
+  .sbtn{
+    -webkit-appearance:none; appearance:none; cursor:pointer; touch-action:manipulation;
+    padding:7px 4px; border-radius:9px; border:1px solid var(--metal-edge);
+    background:linear-gradient(180deg,var(--metal-hi),var(--metal-md));
+    color:var(--ink); font-size:12px; font-weight:700; line-height:1.1; text-align:center;
+    box-shadow:0 1px 0 rgba(255,255,255,.7) inset, 0 2px 4px rgba(0,0,0,.25);
+  }
+  .sbtn .en{ display:block; font-size:8.5px; opacity:.55; font-weight:600; letter-spacing:.3px; margin-top:1px; }
+  .sbtn[disabled]{ opacity:.4; }
+  .sbtn:active,.sbtn.active{
+    background:linear-gradient(180deg,#ff5a52,var(--red-d)); color:#fff; border-color:var(--red-d);
+    box-shadow:inset 0 1px 4px rgba(0,0,0,.4), 0 0 14px rgba(216,35,47,.5);
+  }
+  .sbtn:active .en,.sbtn.active .en{ opacity:.8; }
 
   /* ---- control panel ---- */
   .panel{ display:flex; align-items:center; gap:14px; padding:6px 18px 8px; }
@@ -171,6 +188,18 @@
     </div>
   </div>
 
+  <div class="scratch-grid">
+    <button class="sbtn" data-s="baby" disabled>ベビー<span class="en">Baby</span></button>
+    <button class="sbtn" data-s="forward" disabled>フォワード<span class="en">Forward</span></button>
+    <button class="sbtn" data-s="chirp" disabled>チャープ<span class="en">Chirp</span></button>
+    <button class="sbtn" data-s="tear" disabled>ティアー<span class="en">Tear</span></button>
+    <button class="sbtn" data-s="scribble" disabled>スクリブル<span class="en">Scribble</span></button>
+    <button class="sbtn" data-s="transformer" disabled>トランス<span class="en">Transform</span></button>
+    <button class="sbtn" data-s="flare" disabled>フレア<span class="en">Flare</span></button>
+    <button class="sbtn" data-s="orbit" disabled>オービット<span class="en">Orbit</span></button>
+    <button class="sbtn" data-s="crab" disabled>クラブ<span class="en">Crab</span></button>
+  </div>
+
   <div class="panel">
     <button class="ss" id="play" disabled><span class="led"></span><span class="sslabel">START</span></button>
     <button class="ctl" id="cue" disabled>CUE</button>
@@ -234,6 +263,7 @@ const SEC_PER_REV = 1.8;      // レコード1回転 ≈ 1.8秒 (33⅓rpm 相当
 const MAX_RATE = 12;
 let loaded=false, basePlaying=false, scratching=false, curPos=0, totalSec=0;
 let trackLen=0, prevPos=0, rotDeg=0; // 回転は実移動量を積算（ループでリセットしない）
+let patterning=false, patternTimer=null; // ワンボタン・スクラッチ実行中フラグ
 let faderMode='transform';    // 'transform' = 押すと音 / 'cut' = 押すとカット
 let faderPressed=false;
 
@@ -290,6 +320,7 @@ function useBuffer(buf, name){
   document.getElementById('track').textContent = name;
   document.getElementById('play').disabled=false;
   document.getElementById('cue').disabled=false;
+  document.querySelectorAll('.sbtn').forEach(b=>b.disabled=false);
   updatePlayBtn();
   rateParam.cancelScheduledValues(ctx.currentTime);
   rateParam.setValueAtTime(0, ctx.currentTime);
@@ -377,7 +408,7 @@ playBtn.addEventListener('click', async ()=>{
   if(!loaded) return;
   ensureCtx();
   basePlaying=!basePlaying;
-  if(!scratching){
+  if(!scratching && !patterning){
     rateParam.cancelScheduledValues(ctx.currentTime);
     rateParam.setTargetAtTime(basePlaying?1:0, ctx.currentTime, 0.05);
   }
@@ -402,6 +433,7 @@ function angleOf(x,y){ return Math.atan2(y-cy, x-cx); }
 platter.addEventListener('pointerdown', (e)=>{
   if(!loaded) return;
   e.preventDefault();
+  cancelPattern(); // 手動操作が始まったらワンボタン・スクラッチを中断
   platter.setPointerCapture(e.pointerId);
   pPointer=e.pointerId;
   const r=platter.getBoundingClientRect();
@@ -452,6 +484,7 @@ function applyGain(){
 fader.addEventListener('pointerdown',(e)=>{
   e.preventDefault();
   if(!ctx) return;
+  cancelPattern();
   fader.setPointerCapture(e.pointerId); fPointer=e.pointerId;
   faderPressed=true; fader.classList.toggle('on', faderMode==='transform'); applyGain();
 });
@@ -470,6 +503,78 @@ document.getElementById('modeBtn').addEventListener('click',(e)=>{
   const soundOn = (faderMode==='transform') ? faderPressed : !faderPressed;
   fader.classList.toggle('on', soundOn);
   applyGain();
+});
+
+/* ============ One-button scratch patterns ============ */
+// 各テクニックを「レコード移動(rate)＋フェーダー(gain)」の時系列で表現。
+// steps: [durU(単位時間の倍数), rateF(R倍の速度), gain(0/1)]。1サイクルで移動量が±0になるよう設計。
+const SR = 1.9; // レコード基準速度
+const PATTERNS = {
+  baby:        {u:0.14, reps:3, steps:[[1, 1,1],[1,-1,1]]},
+  forward:     {u:0.14, reps:3, steps:[[1, 1,1],[1,-1,0]]},
+  chirp:       {u:0.10, reps:2, steps:[[1, 1,1],[1, 1,0],[1,-1,1],[1,-1,0]]},
+  tear:        {u:0.09, reps:2, steps:[[2, 1,1],[1,-1.5,1],[1,-0.5,1]]},
+  scribble:    {u:0.06, reps:8, steps:[[1, 1.2,1],[1,-1.2,1]]},
+  transformer: {u:0.10, reps:2, steps:[[1,0.5,1],[1,0.5,0],[1,0.5,1],[1,0.5,0],[1,-2,0]]},
+  flare:       {u:0.08, reps:2, steps:[[1, 1,1],[1, 1,0],[1, 1,1],[1,-1,1],[1,-1,0],[1,-1,1]]},
+  orbit:       {u:0.06, reps:2, steps:[[1, 1,1],[1, 1,0],[1, 1,1],[1, 1,0],[1, 1,1],[1,-1,1],[1,-1,0],[1,-1,1],[1,-1,0],[1,-1,1]]},
+  crab:        {u:0.05, reps:2, steps:[[1, 1,1],[1, 1,0],[1, 1,1],[1, 1,0],[1, 1,1],[1, 1,0],[1, 1,1],[1, 1,0],[4,-2,0]]},
+};
+
+function faderBaselineGain(){
+  return (faderMode==='transform') ? (faderPressed?1:0) : (faderPressed?0:1);
+}
+function cancelPattern(){
+  if(!patterning) return;
+  patterning=false;
+  if(patternTimer){ clearTimeout(patternTimer); patternTimer=null; }
+  const now=ctx.currentTime;
+  rateParam.cancelScheduledValues(now);
+  gain.gain.cancelScheduledValues(now);
+  document.querySelectorAll('.sbtn.active').forEach(b=>b.classList.remove('active'));
+}
+function runScratch(name, btn){
+  if(!loaded) return;
+  ensureCtx();
+  const p=PATTERNS[name]; if(!p) return;
+  // 再実行・手動操作中の自動値をリセット
+  if(patternTimer){ clearTimeout(patternTimer); patternTimer=null; }
+  patterning=true;
+  const now=ctx.currentTime;
+  rateParam.cancelScheduledValues(now);
+  gain.gain.cancelScheduledValues(now);
+  document.querySelectorAll('.sbtn.active').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+
+  let t=now+0.03;
+  let prevRate=rateParam.value, prevG=gain.gain.value;
+  rateParam.setValueAtTime(prevRate, now);
+  gain.gain.setValueAtTime(prevG, now);
+  for(let r=0;r<p.reps;r++){
+    for(const [durU, rateF, g] of p.steps){
+      const dur=durU*p.u, rate=rateF*SR;
+      rateParam.setValueAtTime(prevRate, t);
+      rateParam.linearRampToValueAtTime(rate, t+0.003);
+      gain.gain.setValueAtTime(prevG, t);
+      gain.gain.linearRampToValueAtTime(g, t+0.004);
+      prevRate=rate; prevG=g;
+      t+=dur;
+    }
+  }
+  // 終了後は元の状態へ戻す
+  rateParam.setValueAtTime(prevRate, t);
+  rateParam.linearRampToValueAtTime(basePlaying?1:0, t+0.02);
+  gain.gain.setValueAtTime(prevG, t);
+  gain.gain.linearRampToValueAtTime(faderBaselineGain(), t+0.02);
+
+  const ms=(t+0.05-ctx.currentTime)*1000;
+  patternTimer=setTimeout(()=>{
+    patterning=false; patternTimer=null;
+    if(btn) btn.classList.remove('active');
+  }, ms);
+}
+document.querySelectorAll('.sbtn').forEach(b=>{
+  b.addEventListener('click', ()=> runScratch(b.dataset.s, b));
 });
 
 /* ============ Animation / time / idle-watchdog ============ */
