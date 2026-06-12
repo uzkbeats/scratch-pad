@@ -28,11 +28,11 @@
   }
 
   /* ---- header / brand plate ---- */
-  header{ padding:12px 16px 4px; display:flex; align-items:center; gap:12px; }
+  header{ padding:12px 12px 4px; display:flex; align-items:center; gap:8px; }
   .brand{ display:flex; flex-direction:column; line-height:1; }
   .brand .b1{ font-weight:800; font-size:17px; letter-spacing:3px; color:#1b1d21; }
   .brand .b2{ font-size:9px; letter-spacing:2px; color:var(--red); font-weight:800; margin-top:3px; }
-  .track{ font-size:11px; color:#4c4f54; flex:1; min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+  .track{ font-size:11px; color:#4c4f54; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
 
   /* ---- metallic buttons ---- */
   .loadbtn,.ctl,.mbtn{
@@ -41,7 +41,8 @@
     background:linear-gradient(180deg, var(--metal-hi), var(--metal-md));
     box-shadow:0 1px 0 rgba(255,255,255,.75) inset, 0 2px 4px rgba(0,0,0,.3);
   }
-  .loadbtn{ padding:9px 14px; font-size:13px; }
+  .loadbtn{ padding:9px 13px; font-size:12px; white-space:nowrap; }
+  .loadbtn.rec{ color:#fff; border-color:#9c151f; background:linear-gradient(180deg,#ff6a6a,#d8232f); box-shadow:0 0 14px rgba(216,35,47,.5), inset 0 1px 0 rgba(255,255,255,.3); }
   .ctl{ padding:11px 16px; font-size:12px; letter-spacing:1px; }
   .loadbtn:active,.ctl:active,.mbtn:active{ background:linear-gradient(180deg,var(--metal-md),var(--metal-lo)); box-shadow:inset 0 1px 3px rgba(0,0,0,.45); }
   .ctl[disabled]{ opacity:.45; }
@@ -153,6 +154,7 @@
       <span class="b2">SL-1200 STYLE</span>
     </div>
     <span class="track" id="track">ファイル未読み込み</span>
+    <button class="loadbtn" id="recBtn">🎤 録音</button>
     <button class="loadbtn" id="loadBtn">読み込み</button>
     <input type="file" id="file" accept="audio/*,video/*,.wav,.mp3,.m4a,.aac,.mp4,.mov">
   </header>
@@ -274,6 +276,25 @@ function decodeAudio(arr){
   });
 }
 
+/* ============ Load a decoded buffer into the scratch engine (shared) ============ */
+function useBuffer(buf, name){
+  const left = buf.getChannelData(0).slice(0);
+  let right;
+  if(buf.numberOfChannels>1){ right = buf.getChannelData(1).slice(0); }
+  const msg = {type:'load', left}; const transfer=[left.buffer];
+  if(right){ msg.right=right; transfer.push(right.buffer); }
+  node.port.postMessage(msg, transfer);
+  totalSec = buf.length / buf.sampleRate;
+  trackLen = buf.length;
+  curPos=0; prevPos=0; rotDeg=0; loaded=true; basePlaying=false;
+  document.getElementById('track').textContent = name;
+  document.getElementById('play').disabled=false;
+  document.getElementById('cue').disabled=false;
+  updatePlayBtn();
+  rateParam.cancelScheduledValues(ctx.currentTime);
+  rateParam.setValueAtTime(0, ctx.currentTime);
+}
+
 /* ============ File load ============ */
 const fileInput=document.getElementById('file');
 document.getElementById('loadBtn').addEventListener('click', ()=>{ ensureCtx(); fileInput.click(); });
@@ -290,21 +311,7 @@ fileInput.addEventListener('change', async (e)=>{
     log('デコード中…（少しお待ちください）');
     const buf = await decodeAudio(arr);
     log('準備中…');
-    const left = buf.getChannelData(0).slice(0);
-    let right;
-    if(buf.numberOfChannels>1){ right = buf.getChannelData(1).slice(0); }
-    const msg = {type:'load', left}; const transfer=[left.buffer];
-    if(right){ msg.right=right; transfer.push(right.buffer); }
-    node.port.postMessage(msg, transfer);
-    totalSec = buf.length / buf.sampleRate;
-    trackLen = buf.length;
-    curPos=0; prevPos=0; rotDeg=0; loaded=true; basePlaying=false;
-    document.getElementById('track').textContent = f.name;
-    document.getElementById('play').disabled=false;
-    document.getElementById('cue').disabled=false;
-    updatePlayBtn();
-    rateParam.cancelScheduledValues(ctx.currentTime);
-    rateParam.setValueAtTime(0, ctx.currentTime);
+    useBuffer(buf, f.name);
     hideOverlay();
   }catch(err){
     console.error(err);
@@ -312,6 +319,57 @@ fileInput.addEventListener('change', async (e)=>{
   }
   e.target.value='';
 });
+
+/* ============ Mic recording ============ */
+const recBtn=document.getElementById('recBtn');
+let mediaRec=null, recChunks=[], recStream=null, recTimer=null, recStartT=0;
+recBtn.addEventListener('click', async ()=>{
+  if(mediaRec && mediaRec.state==='recording'){ try{ mediaRec.stop(); }catch(_){} return; }
+  try{
+    ensureCtx();
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      showOverlay('このブラウザはマイク録音に対応していません\n\n画面をタップして閉じる'); return;
+    }
+    recStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    recChunks=[];
+    mediaRec = new MediaRecorder(recStream);
+    mediaRec.ondataavailable=(e)=>{ if(e.data && e.data.size>0) recChunks.push(e.data); };
+    mediaRec.onstop=onRecStop;
+    mediaRec.start();
+    recBtn.classList.add('rec');
+    recStartT=Date.now();
+    recTimer=setInterval(()=>{ recBtn.textContent='■ '+fmt((Date.now()-recStartT)/1000); }, 250);
+    recBtn.textContent='■ 0:00';
+  }catch(err){
+    console.error(err);
+    showOverlay('マイクを使えませんでした：\n'+((err&&err.message)||err)+'\n\n（マイクの許可が必要です）\n\n画面をタップして閉じる');
+    cleanupRec();
+  }
+});
+async function onRecStop(){
+  const type = (mediaRec && mediaRec.mimeType) || 'audio/mp4';
+  const blob = new Blob(recChunks, {type});
+  cleanupRec();
+  if(blob.size===0){ return; }
+  const log=(m)=>{ document.getElementById('overlayMsg').textContent=m; };
+  showOverlay('録音を読み込み中…');
+  try{
+    await initWorklet();
+    const arr = await blob.arrayBuffer();
+    const buf = await decodeAudio(arr);
+    useBuffer(buf, '🎤 録音 '+new Date().toLocaleTimeString());
+    hideOverlay();
+  }catch(err){
+    console.error(err);
+    log('録音を読み込めませんでした：\n'+((err&&err.message)||err)+'\n\n画面をタップして閉じる');
+  }
+}
+function cleanupRec(){
+  if(recTimer){ clearInterval(recTimer); recTimer=null; }
+  if(recStream){ recStream.getTracks().forEach(t=>t.stop()); recStream=null; }
+  mediaRec=null; recChunks=[];
+  recBtn.classList.remove('rec'); recBtn.textContent='🎤 録音';
+}
 
 /* ============ Play / Stop / Cue ============ */
 const playBtn=document.getElementById('play');
