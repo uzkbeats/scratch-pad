@@ -158,7 +158,9 @@
   .fader .flabel{ font-weight:900; font-size:20px; letter-spacing:5px; color:#6c7075; }
   .fader.on{ background:linear-gradient(180deg,#123a30,#0a221b); box-shadow:inset 0 0 0 2px var(--led), 0 0 22px rgba(55,226,159,.3); }
   .fader.on .flabel{ color:var(--led); text-shadow:0 0 10px rgba(55,226,159,.6); }
-  .fader .sub{ position:absolute; top:7px; left:12px; font-size:10px; color:#7d8186; }
+  .fader .fstat{ position:absolute; top:7px; left:12px; font-size:11px; font-weight:800; letter-spacing:1px; color:#7d8186; }
+  .fader.on .fstat{ color:var(--led); text-shadow:0 0 8px rgba(55,226,159,.6); }
+  .fader.off{ opacity:.5; }
   .fader .modebtn{ position:absolute; top:6px; right:8px; }
   .fader .modebtn .mbtn{ padding:5px 9px; font-size:10px; }
 
@@ -217,7 +219,8 @@
     <div class="lcd" id="time">0:00 / 0:00</div>
   </div>
 
-  <div class="fader" id="fader">
+  <div class="fader off" id="fader">
+    <span class="fstat" id="fstat">OFF</span>
     <span class="flabel">CUT</span>
     <span class="modebtn"><button class="mbtn" id="modeBtn">Transform</button></span>
   </div>
@@ -334,6 +337,10 @@ function useBuffer(buf, name){
   document.getElementById('cue').disabled=false;
   document.querySelectorAll('.sbtn').forEach(b=>b.disabled=false);
   updatePlayBtn();
+  // 読み込んだらCutモード（デフォルトで音が出る状態）にして、ON表示にする
+  faderMode='cut'; faderPressed=false;
+  document.getElementById('modeBtn').textContent='Cut';
+  updateFaderUI(); applyGain();
   rateParam.cancelScheduledValues(ctx.currentTime);
   rateParam.setValueAtTime(0, ctx.currentTime);
 }
@@ -485,6 +492,14 @@ platter.addEventListener('pointercancel', endScratch);
 const fader=document.getElementById('fader');
 let fPointer=null;
 
+// 見た目: ファイル無し=OFF(暗い) / 音が通っている=ON(緑) / カット中=CUT
+function updateFaderUI(){
+  const soundOn = loaded && ((faderMode==='transform') ? faderPressed : !faderPressed);
+  fader.classList.toggle('on', soundOn);
+  fader.classList.toggle('off', !loaded);
+  const st=document.getElementById('fstat');
+  if(st) st.textContent = !loaded ? 'OFF' : (soundOn ? 'ON' : 'CUT');
+}
 function applyGain(){
   if(!gain) return;
   // transform: 押す=音(1), 離す=無音(0) / cut: 押す=無音(0), 離す=音(1)
@@ -494,15 +509,15 @@ function applyGain(){
 }
 fader.addEventListener('pointerdown',(e)=>{
   e.preventDefault();
-  if(!ctx) return;
+  if(!ctx || !loaded) return;
   cancelPattern();
   fader.setPointerCapture(e.pointerId); fPointer=e.pointerId;
-  faderPressed=true; fader.classList.toggle('on', faderMode==='transform'); applyGain();
+  faderPressed=true; updateFaderUI(); applyGain();
 });
 function faderUp(e){
   if(e.pointerId!==fPointer) return;
   fPointer=null; faderPressed=false;
-  fader.classList.toggle('on', faderMode==='cut'); applyGain();
+  updateFaderUI(); applyGain();
 }
 fader.addEventListener('pointerup', faderUp);
 fader.addEventListener('pointercancel', faderUp);
@@ -511,8 +526,7 @@ document.getElementById('modeBtn').addEventListener('click',(e)=>{
   e.stopPropagation();
   faderMode = (faderMode==='transform') ? 'cut' : 'transform';
   document.getElementById('modeBtn').textContent = (faderMode==='transform')?'Transform':'Cut';
-  const soundOn = (faderMode==='transform') ? faderPressed : !faderPressed;
-  fader.classList.toggle('on', soundOn);
+  updateFaderUI();
   applyGain();
 });
 
