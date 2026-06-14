@@ -47,10 +47,19 @@
   .loadbtn:active,.ctl:active,.mbtn:active{ background:linear-gradient(180deg,var(--metal-md),var(--metal-lo)); box-shadow:inset 0 1px 3px rgba(0,0,0,.45); }
   .ctl[disabled]{ opacity:.45; }
 
+  /* ---- waveform ---- */
+  .wavewrap{
+    position:relative; height:60px; margin:6px 12px 0; border-radius:10px; overflow:hidden;
+    border:1px solid var(--metal-edge); background:linear-gradient(180deg,#0e1512,#0a100e);
+    box-shadow:inset 0 2px 8px rgba(0,0,0,.6), 0 1px 0 rgba(255,255,255,.3);
+    touch-action:none;
+  }
+  .wavewrap canvas{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+
   /* ---- turntable ---- */
   .stage{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:0; padding:4px; }
   .platter{
-    position:relative; width:min(84vw, 48vh); aspect-ratio:1/1; border-radius:50%;
+    position:relative; width:min(84vw, 46vh); aspect-ratio:1/1; border-radius:50%;
     touch-action:none;
     background:radial-gradient(circle at 50% 50%, #34373c 0 4%, #25272b 4% 100%);
     box-shadow:
@@ -175,6 +184,11 @@
     <button class="loadbtn" id="loadBtn">読み込み</button>
     <input type="file" id="file" accept="audio/*,video/*,.wav,.mp3,.m4a,.aac,.mp4,.mov">
   </header>
+
+  <div class="wavewrap" id="wavewrap">
+    <canvas id="wave"></canvas>
+    <canvas id="wavePlay"></canvas>
+  </div>
 
   <div class="stage">
     <div class="platter" id="platter">
@@ -305,6 +319,7 @@ function decodeAudio(arr){
 
 /* ============ Load a decoded buffer into the scratch engine (shared) ============ */
 function useBuffer(buf, name){
+  buildPeaks(buf); renderWave();
   const left = buf.getChannelData(0).slice(0);
   let right;
   if(buf.numberOfChannels>1){ right = buf.getChannelData(1).slice(0); }
@@ -559,6 +574,71 @@ document.querySelectorAll('.sbtn').forEach(b=>{
   b.addEventListener('click', ()=> runScratch(b.dataset.s, b));
 });
 
+/* ============ Waveform display + seek ============ */
+const waveWrap=document.getElementById('wavewrap');
+const waveCv=document.getElementById('wave');
+const playCv=document.getElementById('wavePlay');
+const waveCtx=waveCv.getContext('2d');
+const playCtx=playCv.getContext('2d');
+let peakMin=null, peakMax=null, waveCssW=0, waveCssH=0, waveDpr=1;
+
+function buildPeaks(buf){
+  const N=1024;
+  const data=buf.getChannelData(0);
+  const len=data.length;
+  peakMin=new Float32Array(N); peakMax=new Float32Array(N);
+  const block=len/N;
+  for(let i=0;i<N;i++){
+    let s=(i*block)|0, e=((i+1)*block)|0; if(e<=s)e=s+1; if(e>len)e=len;
+    let mn=1, mx=-1;
+    for(let j=s;j<e;j++){ const v=data[j]; if(v<mn)mn=v; if(v>mx)mx=v; }
+    if(mn>mx){ mn=0; mx=0; }
+    peakMin[i]=mn; peakMax[i]=mx;
+  }
+}
+function renderWave(){
+  const rect=waveWrap.getBoundingClientRect();
+  waveDpr=window.devicePixelRatio||1;
+  const w=Math.max(1,Math.round(rect.width)), h=Math.max(1,Math.round(rect.height));
+  waveCssW=w; waveCssH=h;
+  waveCv.width=w*waveDpr; waveCv.height=h*waveDpr;
+  playCv.width=w*waveDpr; playCv.height=h*waveDpr;
+  const c=waveCtx; c.setTransform(waveDpr,0,0,waveDpr,0,0); c.clearRect(0,0,w,h);
+  if(!peakMax) return;
+  const N=peakMax.length, mid=h/2, amp=h/2*0.92;
+  c.beginPath();
+  for(let x=0;x<w;x++){ const i=(x/w*N)|0; c[x?'lineTo':'moveTo'](x, mid - peakMax[i]*amp); }
+  for(let x=w-1;x>=0;x--){ const i=(x/w*N)|0; c.lineTo(x, mid - peakMin[i]*amp); }
+  c.closePath(); c.fillStyle='#3f7468'; c.fill();
+  c.strokeStyle='rgba(255,255,255,.06)'; c.lineWidth=1;
+  c.beginPath(); c.moveTo(0,mid+0.5); c.lineTo(w,mid+0.5); c.stroke();
+}
+function drawPlayhead(){
+  if(!waveCssW || !trackLen) return;
+  const pc=playCtx; pc.setTransform(waveDpr,0,0,waveDpr,0,0);
+  pc.clearRect(0,0,waveCssW,waveCssH);
+  let frac=curPos/trackLen; frac=frac-Math.floor(frac);
+  const x=frac*waveCssW;
+  pc.fillStyle='rgba(55,226,159,.16)'; pc.fillRect(0,0,x,waveCssH);
+  pc.strokeStyle='#37e29f'; pc.lineWidth=2;
+  pc.beginPath(); pc.moveTo(x,0); pc.lineTo(x,waveCssH); pc.stroke();
+}
+let waveSeeking=false;
+function waveSeek(e){
+  if(!loaded || !trackLen) return;
+  const rect=waveWrap.getBoundingClientRect();
+  let frac=(e.clientX-rect.left)/rect.width; frac=Math.max(0,Math.min(0.999,frac));
+  const pos=frac*trackLen;
+  node.port.postMessage({type:'seek', pos}); curPos=pos; prevPos=pos;
+}
+waveWrap.addEventListener('pointerdown',(e)=>{ e.preventDefault(); waveWrap.setPointerCapture(e.pointerId); waveSeeking=true; waveSeek(e); });
+waveWrap.addEventListener('pointermove',(e)=>{ if(waveSeeking) waveSeek(e); });
+waveWrap.addEventListener('pointerup',()=>{ waveSeeking=false; });
+waveWrap.addEventListener('pointercancel',()=>{ waveSeeking=false; });
+window.addEventListener('resize', renderWave);
+window.addEventListener('orientationchange', ()=>setTimeout(renderWave,200));
+renderWave();
+
 /* ============ Animation / time / idle-watchdog ============ */
 function fmt(s){ s=Math.max(0,s|0); return (s/60|0)+':'+String(s%60).padStart(2,'0'); }
 function tick(){
@@ -578,6 +658,7 @@ function tick(){
     prevPos = curPos;
     disc.style.transform = 'rotate('+ rotDeg +'deg)';
   }
+  drawPlayhead();
   if(loaded && sampleRate){
     document.getElementById('time').textContent = fmt(curPos/sampleRate)+' / '+fmt(totalSec);
   }
