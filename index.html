@@ -14,6 +14,7 @@
   }
   *{box-sizing:border-box; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;}
   html,body{height:100%; margin:0; overflow:hidden;}
+  @supports (height:100dvh){ body{height:100dvh;} } /* iOS: ツールバー分を除いた実表示域に合わせる */
   body{
     color:var(--ink);
     font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif;
@@ -59,7 +60,8 @@
   /* ---- turntable ---- */
   .stage{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; min-height:0; padding:4px; }
   .platter{
-    position:relative; width:min(84vw, 46vh); aspect-ratio:1/1; border-radius:50%;
+    /* stageの残り高さに合わせて伸縮（横は84vwまで）→ 画面が狭くてもはみ出さない */
+    position:relative; height:min(100%, 84vw); aspect-ratio:1/1; border-radius:50%;
     touch-action:none;
     background:radial-gradient(circle at 50% 50%, #34373c 0 4%, #25272b 4% 100%);
     box-shadow:
@@ -147,7 +149,7 @@
 
   /* ---- cut fader ---- */
   .fader{
-    margin:4px 16px calc(14px + env(safe-area-inset-bottom));
+    margin:4px 16px 10px; /* 下のセーフエリアはbodyのpaddingで確保（二重取りしない） */
     height:82px; border-radius:14px; position:relative; touch-action:none; overflow:hidden;
     border:1px solid var(--metal-edge);
     background:linear-gradient(180deg,#2b2d31,#161719);
